@@ -44,7 +44,7 @@ export class NostrListener {
 
     const sub = this.pool.subscribeMany(
       userRelays,
-      [filter],
+      [filter] as any,
       {
         onevent: (event: NostrEvent) => {
           onMessage(event, npub);
@@ -55,7 +55,7 @@ export class NostrListener {
       }
     );
 
-    this.subscriptions.set(npub, sub);
+    this.subscriptions.set(npub, sub as any);
     console.log(`Subscribed to ${npub} on ${userRelays.join(', ')}`);
   }
 

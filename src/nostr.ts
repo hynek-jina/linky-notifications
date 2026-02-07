@@ -42,20 +42,29 @@ export class NostrListener {
       since: lastCheck,
     };
 
-    const sub = this.pool.subscribeMany(
-      userRelays,
-      [filter] as any,
-      {
-        onevent: (event: NostrEvent) => {
-          onMessage(event, npub);
-        },
-        onclose: () => {
-          console.log(`Subscription closed for ${npub}`);
-        },
-      }
-    );
+    const subscribe = () => {
+      const sub = this.pool.subscribeMany(
+        userRelays,
+        [filter] as any,
+        {
+          onevent: (event: NostrEvent) => {
+            onMessage(event, npub);
+          },
+          onclose: () => {
+            console.log(`Subscription closed for ${npub}, reconnecting in 5s...`);
+            // Reconnect after 5 seconds
+            setTimeout(() => {
+              if (this.subscriptions.has(npub)) {
+                subscribe();
+              }
+            }, 5000);
+          },
+        }
+      );
+      this.subscriptions.set(npub, sub as any);
+    };
 
-    this.subscriptions.set(npub, sub as any);
+    subscribe();
     console.log(`Subscribed to ${npub} on ${userRelays.join(', ')}`);
   }
 

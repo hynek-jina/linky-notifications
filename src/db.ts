@@ -1,9 +1,4 @@
-import Database from 'better-sqlite3';
-import path from 'path';
-import { fileURLToPath } from 'url';
-
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
+import { createClient, type Client } from '@libsql/client';
 
 export interface Subscription {
   npub: string;
@@ -23,16 +18,24 @@ export interface PushSubscription {
 }
 
 class DatabaseManager {
-  private db: Database.Database;
+  private client: Client;
+  private initialized: boolean = false;
 
   constructor() {
-    const dbPath = process.env.DB_PATH || path.join(__dirname, '..', 'data', 'subscriptions.db');
-    this.db = new Database(dbPath);
-    this.init();
+    const url = process.env.TURSO_URL;
+    const authToken = process.env.TURSO_AUTH_TOKEN;
+
+    if (!url || !authToken) {
+      throw new Error('TURSO_URL and TURSO_AUTH_TOKEN must be set');
+    }
+
+    this.client = createClient({ url, authToken });
   }
 
-  private init() {
-    this.db.exec(`
+  async init(): Promise<void> {
+    if (this.initialized) return;
+
+    await this.client.execute(`
       CREATE TABLE IF NOT EXISTS subscriptions (
         npub TEXT PRIMARY KEY,
         subscription TEXT NOT NULL,
@@ -41,59 +44,77 @@ class DatabaseManager {
         updatedAt INTEGER DEFAULT 0
       )
     `);
+
+    this.initialized = true;
   }
 
-  addSubscription(subscription: Subscription): void {
-    const stmt = this.db.prepare(`
-      INSERT OR REPLACE INTO subscriptions (npub, subscription, relays, lastCheck, updatedAt)
-      VALUES (?, ?, ?, ?, ?)
-    `);
-    stmt.run(
-      subscription.npub,
-      JSON.stringify(subscription.subscription),
-      JSON.stringify(subscription.relays),
-      subscription.lastCheck,
-      subscription.updatedAt
-    );
+  async addSubscription(subscription: Subscription): Promise<void> {
+    await this.init();
+    
+    await this.client.execute({
+      sql: `
+        INSERT OR REPLACE INTO subscriptions (npub, subscription, relays, lastCheck, updatedAt)
+        VALUES (?, ?, ?, ?, ?)
+      `,
+      args: [
+        subscription.npub,
+        JSON.stringify(subscription.subscription),
+        JSON.stringify(subscription.relays),
+        subscription.lastCheck,
+        subscription.updatedAt
+      ]
+    });
   }
 
-  removeSubscription(npub: string): void {
-    const stmt = this.db.prepare('DELETE FROM subscriptions WHERE npub = ?');
-    stmt.run(npub);
+  async removeSubscription(npub: string): Promise<void> {
+    await this.init();
+    
+    await this.client.execute({
+      sql: 'DELETE FROM subscriptions WHERE npub = ?',
+      args: [npub]
+    });
   }
 
-  getSubscription(npub: string): Subscription | null {
-    const stmt = this.db.prepare('SELECT * FROM subscriptions WHERE npub = ?');
-    const row = stmt.get(npub) as any;
-    if (!row) return null;
-    return this.rowToSubscription(row);
+  async getSubscription(npub: string): Promise<Subscription | null> {
+    await this.init();
+    
+    const result = await this.client.execute({
+      sql: 'SELECT * FROM subscriptions WHERE npub = ?',
+      args: [npub]
+    });
+
+    if (result.rows.length === 0) return null;
+    return this.rowToSubscription(result.rows[0]);
   }
 
-  getAllSubscriptions(): Subscription[] {
-    const stmt = this.db.prepare('SELECT * FROM subscriptions');
-    const rows = stmt.all() as any[];
-    return rows.map(row => this.rowToSubscription(row));
+  async getAllSubscriptions(): Promise<Subscription[]> {
+    await this.init();
+    
+    const result = await this.client.execute('SELECT * FROM subscriptions');
+    return result.rows.map(row => this.rowToSubscription(row));
   }
 
-  updateLastCheck(npub: string, timestamp: number): void {
-    const stmt = this.db.prepare(`
-      UPDATE subscriptions SET lastCheck = ?, updatedAt = ? WHERE npub = ?
-    `);
-    stmt.run(timestamp, Date.now(), npub);
+  async updateLastCheck(npub: string, timestamp: number): Promise<void> {
+    await this.init();
+    
+    await this.client.execute({
+      sql: 'UPDATE subscriptions SET lastCheck = ?, updatedAt = ? WHERE npub = ?',
+      args: [timestamp, Date.now(), npub]
+    });
   }
 
   private rowToSubscription(row: any): Subscription {
     return {
-      npub: row.npub,
-      subscription: JSON.parse(row.subscription),
-      relays: JSON.parse(row.relays),
-      lastCheck: row.lastCheck,
-      updatedAt: row.updatedAt,
+      npub: row.npub as string,
+      subscription: JSON.parse(row.subscription as string),
+      relays: JSON.parse(row.relays as string),
+      lastCheck: row.lastCheck as number,
+      updatedAt: row.updatedAt as number,
     };
   }
 
-  close(): void {
-    this.db.close();
+  async close(): Promise<void> {
+    await this.client.close();
   }
 }
 

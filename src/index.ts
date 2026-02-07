@@ -24,7 +24,7 @@ app.get('/health', (req, res) => {
 });
 
 // Subscribe endpoint
-app.post('/subscribe', (req, res) => {
+app.post('/subscribe', async (req, res) => {
   try {
     const { npub, subscription, relays } = req.body;
 
@@ -45,7 +45,7 @@ app.post('/subscribe', (req, res) => {
     };
 
     // Save to database
-    db.addSubscription(subscriptionData);
+    await db.addSubscription(subscriptionData);
 
     // Subscribe to Nostr events
     nostrListener.subscribeToUser(subscriptionData, handleNewMessage);
@@ -60,7 +60,7 @@ app.post('/subscribe', (req, res) => {
 });
 
 // Unsubscribe endpoint
-app.post('/unsubscribe', (req, res) => {
+app.post('/unsubscribe', async (req, res) => {
   try {
     const { npub } = req.body;
 
@@ -69,7 +69,7 @@ app.post('/unsubscribe', (req, res) => {
     }
 
     // Remove from database
-    db.removeSubscription(npub);
+    await db.removeSubscription(npub);
 
     // Unsubscribe from Nostr
     nostrListener.unsubscribeUser(npub);
@@ -86,7 +86,7 @@ app.post('/unsubscribe', (req, res) => {
 // Handle new Nostr message
 async function handleNewMessage(event: NostrEvent, npub: string): Promise<void> {
   try {
-    const subscription = db.getSubscription(npub);
+    const subscription = await db.getSubscription(npub);
     if (!subscription) return;
 
     // Get sender info
@@ -116,7 +116,7 @@ async function handleNewMessage(event: NostrEvent, npub: string): Promise<void> 
     } catch (error) {
       if (isSubscriptionExpired(error as any)) {
         console.log(`Subscription expired for ${npub}, removing...`);
-        db.removeSubscription(npub);
+        await db.removeSubscription(npub);
         nostrListener.unsubscribeUser(npub);
         activeSubscriptions.delete(npub);
       } else {
@@ -125,15 +125,15 @@ async function handleNewMessage(event: NostrEvent, npub: string): Promise<void> 
     }
 
     // Update last check timestamp
-    db.updateLastCheck(npub, Math.floor(Date.now() / 1000));
+    await db.updateLastCheck(npub, Math.floor(Date.now() / 1000));
   } catch (error) {
     console.error('Error handling message:', error);
   }
 }
 
 // Load existing subscriptions on startup
-function loadExistingSubscriptions(): void {
-  const subscriptions = db.getAllSubscriptions();
+async function loadExistingSubscriptions(): Promise<void> {
+  const subscriptions = await db.getAllSubscriptions();
   for (const sub of subscriptions) {
     nostrListener.subscribeToUser(sub, handleNewMessage);
     activeSubscriptions.set(sub.npub, sub);
@@ -148,16 +148,16 @@ app.listen(PORT, () => {
 });
 
 // Graceful shutdown
-process.on('SIGTERM', () => {
+process.on('SIGTERM', async () => {
   console.log('SIGTERM received, shutting down gracefully...');
   nostrListener.close();
-  db.close();
+  await db.close();
   process.exit(0);
 });
 
-process.on('SIGINT', () => {
+process.on('SIGINT', async () => {
   console.log('SIGINT received, shutting down gracefully...');
   nostrListener.close();
-  db.close();
+  await db.close();
   process.exit(0);
 });

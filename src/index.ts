@@ -99,10 +99,33 @@ async function handleNewMessage(event: NostrEvent, npub: string): Promise<void> 
                       senderMetadata?.name || 
                       'Kontakt';
 
-    // Build notification
+    // Parse message content
+    let messageContent = '';
+    try {
+      // Try to parse as gift wrap (kind 1059) or direct message (kind 4)
+      const content = event.content;
+      
+      // Check if it's a Cashu token
+      if (content.includes('cashuB') || content.includes('cashuA')) {
+        // Extract amount from token if possible
+        const match = content.match(/cashu[AB][a-zA-Z0-9]+/);
+        if (match) {
+          messageContent = 'Přišly satoshi';
+        } else {
+          messageContent = 'Přišly satoshi';
+        }
+      } else {
+        // Regular message - truncate if too long
+        messageContent = content.length > 100 ? content.substring(0, 97) + '...' : content;
+      }
+    } catch {
+      messageContent = 'Nová zpráva';
+    }
+
+    // Build notification with title on single line
     const payload: NotificationPayload = {
-      title: `${senderName} píše`,
-      body: 'Máš novou zprávu v Linky',
+      title: `${senderName} from Linky`,
+      body: messageContent,
       data: {
         type: 'dm',
         contactNpub: nip19.npubEncode(event.pubkey),

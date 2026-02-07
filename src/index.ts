@@ -1,0 +1,163 @@
+import express from 'express';
+import cors from 'cors';
+import { db, type Subscription } from './db.js';
+import { sendNotification, isSubscriptionExpired, type NotificationPayload } from './push.js';
+import { NostrListener } from './nostr.js';
+import { nip19 } from 'nostr-tools';
+import type { Event as NostrEvent } from 'nostr-tools';
+
+const app = express();
+const PORT = process.env.PORT || 3000;
+
+app.use(cors());
+app.use(express.json());
+
+// Initialize Nostr listener
+const nostrListener = new NostrListener();
+
+// Track active subscriptions
+const activeSubscriptions = new Map<string, Subscription>();
+
+// Health check endpoint
+app.get('/health', (req, res) => {
+  res.json({ status: 'ok', timestamp: new Date().toISOString() });
+});
+
+// Subscribe endpoint
+app.post('/subscribe', (req, res) => {
+  try {
+    const { npub, subscription, relays } = req.body;
+
+    if (!npub || !npub.startsWith('npub1') || npub.length < 20) {
+      return res.status(400).json({ error: 'Invalid npub' });
+    }
+
+    if (!subscription || !subscription.endpoint) {
+      return res.status(400).json({ error: 'Invalid subscription' });
+    }
+
+    const subscriptionData: Subscription = {
+      npub,
+      subscription,
+      relays: relays?.slice(0, 3) || [],
+      lastCheck: Math.floor(Date.now() / 1000),
+      updatedAt: Date.now(),
+    };
+
+    // Save to database
+    db.addSubscription(subscriptionData);
+
+    // Subscribe to Nostr events
+    nostrListener.subscribeToUser(subscriptionData, handleNewMessage);
+    activeSubscriptions.set(npub, subscriptionData);
+
+    console.log(`New subscription: ${npub}`);
+    res.json({ success: true });
+  } catch (error) {
+    console.error('Subscribe error:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// Unsubscribe endpoint
+app.post('/unsubscribe', (req, res) => {
+  try {
+    const { npub } = req.body;
+
+    if (!npub) {
+      return res.status(400).json({ error: 'Invalid npub' });
+    }
+
+    // Remove from database
+    db.removeSubscription(npub);
+
+    // Unsubscribe from Nostr
+    nostrListener.unsubscribeUser(npub);
+    activeSubscriptions.delete(npub);
+
+    console.log(`Unsubscribed: ${npub}`);
+    res.json({ success: true });
+  } catch (error) {
+    console.error('Unsubscribe error:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// Handle new Nostr message
+async function handleNewMessage(event: NostrEvent, npub: string): Promise<void> {
+  try {
+    const subscription = db.getSubscription(npub);
+    if (!subscription) return;
+
+    // Get sender info
+    const senderMetadata = await nostrListener.fetchSenderMetadata(
+      event.pubkey,
+      subscription.relays.length > 0 ? subscription.relays : ['wss://nos.lol']
+    );
+
+    const senderName = senderMetadata?.display_name || 
+                      senderMetadata?.name || 
+                      'Kontakt';
+
+    // Build notification
+    const payload: NotificationPayload = {
+      title: `${senderName} píše`,
+      body: 'Máš novou zprávu v Linky',
+      data: {
+        type: 'dm',
+        contactNpub: nip19.npubEncode(event.pubkey),
+      },
+    };
+
+    // Send push notification
+    try {
+      await sendNotification(subscription.subscription, payload);
+      console.log(`Notification sent to ${npub}`);
+    } catch (error) {
+      if (isSubscriptionExpired(error as any)) {
+        console.log(`Subscription expired for ${npub}, removing...`);
+        db.removeSubscription(npub);
+        nostrListener.unsubscribeUser(npub);
+        activeSubscriptions.delete(npub);
+      } else {
+        throw error;
+      }
+    }
+
+    // Update last check timestamp
+    db.updateLastCheck(npub, Math.floor(Date.now() / 1000));
+  } catch (error) {
+    console.error('Error handling message:', error);
+  }
+}
+
+// Load existing subscriptions on startup
+function loadExistingSubscriptions(): void {
+  const subscriptions = db.getAllSubscriptions();
+  for (const sub of subscriptions) {
+    nostrListener.subscribeToUser(sub, handleNewMessage);
+    activeSubscriptions.set(sub.npub, sub);
+  }
+  console.log(`Loaded ${subscriptions.length} existing subscriptions`);
+}
+
+// Start server
+app.listen(PORT, () => {
+  console.log(`Linky notification server running on port ${PORT}`);
+  loadExistingSubscriptions();
+});
+
+// Graceful shutdown
+process.on('SIGTERM', () => {
+  console.log('SIGTERM received, shutting down gracefully...');
+  nostrListener.close();
+  db.close();
+  process.exit(0);
+});
+
+process.on('SIGINT', () => {
+  console.log('SIGINT received, shutting down gracefully...');
+  nostrListener.close();
+  db.close();
+  process.exit(0);
+});

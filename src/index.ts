@@ -99,33 +99,12 @@ async function handleNewMessage(event: NostrEvent, npub: string): Promise<void> 
                       senderMetadata?.name || 
                       'Kontakt';
 
-    // Parse message content
-    let messageContent = '';
-    try {
-      // Try to parse as gift wrap (kind 1059) or direct message (kind 4)
-      const content = event.content;
-      
-      // Check if it's a Cashu token
-      if (content.includes('cashuB') || content.includes('cashuA')) {
-        // Extract amount from token if possible
-        const match = content.match(/cashu[AB][a-zA-Z0-9]+/);
-        if (match) {
-          messageContent = 'Přišly satoshi';
-        } else {
-          messageContent = 'Přišly satoshi';
-        }
-      } else {
-        // Regular message - truncate if too long
-        messageContent = content.length > 100 ? content.substring(0, 97) + '...' : content;
-      }
-    } catch {
-      messageContent = 'Nová zpráva';
-    }
-
-    // Build notification with title on single line
+    // Note: Server cannot read message content for encrypted messages (NIP-17 gift wrap)
+    // We only know a message arrived, not its content
+    // Build simple notification without message content
     const payload: NotificationPayload = {
-      title: `${senderName} from Linky`,
-      body: messageContent,
+      title: `${senderName}`,
+      body: 'New message', // Generic message - content is encrypted
       data: {
         type: 'dm',
         contactNpub: nip19.npubEncode(event.pubkey),

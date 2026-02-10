@@ -1,10 +1,14 @@
-import express from 'express';
-import cors from 'cors';
-import { db, type Subscription } from './db.js';
-import { sendNotification, isSubscriptionExpired, type NotificationPayload } from './push.js';
-import { NostrListener } from './nostr.js';
-import { nip19 } from 'nostr-tools';
-import type { Event as NostrEvent } from 'nostr-tools';
+import cors from "cors";
+import express from "express";
+import type { Event as NostrEvent } from "nostr-tools";
+import { nip19 } from "nostr-tools";
+import { db, type Subscription } from "./db.js";
+import { NostrListener } from "./nostr.js";
+import {
+  isSubscriptionExpired,
+  sendNotification,
+  type NotificationPayload,
+} from "./push.js";
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -18,28 +22,37 @@ const nostrListener = new NostrListener();
 // Track active subscriptions
 const activeSubscriptions = new Map<string, Subscription>();
 
+function normalizeRelays(input: unknown): string[] {
+  if (!Array.isArray(input)) return [];
+  return input
+    .filter((relay) => typeof relay === "string")
+    .map((relay) => relay.trim())
+    .filter((relay) => relay.startsWith("wss://") || relay.startsWith("ws://"))
+    .slice(0, 3);
+}
+
 // Health check endpoint
-app.get('/health', (req, res) => {
-  res.json({ status: 'ok', timestamp: new Date().toISOString() });
+app.get("/health", (req, res) => {
+  res.json({ status: "ok", timestamp: new Date().toISOString() });
 });
 
 // Subscribe endpoint
-app.post('/subscribe', async (req, res) => {
+app.post("/subscribe", async (req, res) => {
   try {
     const { npub, subscription, relays } = req.body;
 
-    if (!npub || !npub.startsWith('npub1') || npub.length < 20) {
-      return res.status(400).json({ error: 'Invalid npub' });
+    if (!npub || !npub.startsWith("npub1") || npub.length < 20) {
+      return res.status(400).json({ error: "Invalid npub" });
     }
 
     if (!subscription || !subscription.endpoint) {
-      return res.status(400).json({ error: 'Invalid subscription' });
+      return res.status(400).json({ error: "Invalid subscription" });
     }
 
     const subscriptionData: Subscription = {
       npub,
       subscription,
-      relays: relays?.slice(0, 3) || [],
+      relays: normalizeRelays(relays),
       lastCheck: Math.floor(Date.now() / 1000),
       updatedAt: Date.now(),
     };
@@ -54,18 +67,18 @@ app.post('/subscribe', async (req, res) => {
     console.log(`New subscription: ${npub}`);
     res.json({ success: true });
   } catch (error) {
-    console.error('Subscribe error:', error);
-    res.status(500).json({ error: 'Internal server error' });
+    console.error("Subscribe error:", error);
+    res.status(500).json({ error: "Internal server error" });
   }
 });
 
 // Unsubscribe endpoint
-app.post('/unsubscribe', async (req, res) => {
+app.post("/unsubscribe", async (req, res) => {
   try {
     const { npub } = req.body;
 
     if (!npub) {
-      return res.status(400).json({ error: 'Invalid npub' });
+      return res.status(400).json({ error: "Invalid npub" });
     }
 
     // Remove from database
@@ -78,13 +91,16 @@ app.post('/unsubscribe', async (req, res) => {
     console.log(`Unsubscribed: ${npub}`);
     res.json({ success: true });
   } catch (error) {
-    console.error('Unsubscribe error:', error);
-    res.status(500).json({ error: 'Internal server error' });
+    console.error("Unsubscribe error:", error);
+    res.status(500).json({ error: "Internal server error" });
   }
 });
 
 // Handle new Nostr message
-async function handleNewMessage(event: NostrEvent, npub: string): Promise<void> {
+async function handleNewMessage(
+  event: NostrEvent,
+  npub: string,
+): Promise<void> {
   try {
     const subscription = await db.getSubscription(npub);
     if (!subscription) return;
@@ -92,21 +108,20 @@ async function handleNewMessage(event: NostrEvent, npub: string): Promise<void> 
     // Get sender info
     const senderMetadata = await nostrListener.fetchSenderMetadata(
       event.pubkey,
-      subscription.relays.length > 0 ? subscription.relays : ['wss://nos.lol']
+      subscription.relays.length > 0 ? subscription.relays : ["wss://nos.lol"],
     );
 
-    const senderName = senderMetadata?.display_name || 
-                      senderMetadata?.name || 
-                      'Kontakt';
+    const senderName =
+      senderMetadata?.display_name || senderMetadata?.name || "Kontakt";
 
     // Note: Server cannot read message content for encrypted messages (NIP-17 gift wrap)
     // We only know a message arrived, not its content
     // Build simple notification without message content
     const payload: NotificationPayload = {
       title: `${senderName}`,
-      body: 'New message', // Generic message - content is encrypted
+      body: "New message", // Generic message - content is encrypted
       data: {
-        type: 'dm',
+        type: "dm",
         contactNpub: nip19.npubEncode(event.pubkey),
       },
     };
@@ -127,9 +142,11 @@ async function handleNewMessage(event: NostrEvent, npub: string): Promise<void> 
     }
 
     // Update last check timestamp
-    await db.updateLastCheck(npub, Math.floor(Date.now() / 1000));
+    const lastCheck = Math.floor(Date.now() / 1000);
+    await db.updateLastCheck(npub, lastCheck);
+    nostrListener.updateLastCheck(npub, lastCheck);
   } catch (error) {
-    console.error('Error handling message:', error);
+    console.error("Error handling message:", error);
   }
 }
 
@@ -150,15 +167,15 @@ app.listen(PORT, () => {
 });
 
 // Graceful shutdown
-process.on('SIGTERM', async () => {
-  console.log('SIGTERM received, shutting down gracefully...');
+process.on("SIGTERM", async () => {
+  console.log("SIGTERM received, shutting down gracefully...");
   nostrListener.close();
   await db.close();
   process.exit(0);
 });
 
-process.on('SIGINT', async () => {
-  console.log('SIGINT received, shutting down gracefully...');
+process.on("SIGINT", async () => {
+  console.log("SIGINT received, shutting down gracefully...");
   nostrListener.close();
   await db.close();
   process.exit(0);

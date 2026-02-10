@@ -49,8 +49,15 @@ export class NostrListener {
         since: this.lastChecks.get(npub) ?? lastCheck,
       };
 
+      console.log(
+        `Subscribing ${npub} with filter kinds=${filter.kinds?.join(",")}, #p=${pubkey}, since=${filter.since}`,
+      );
+
       const sub = this.pool.subscribeMany(userRelays, filter as any, {
         onevent: (event: NostrEvent) => {
+          console.log(
+            `Event received for ${npub}: kind=${event.kind} id=${event.id} pubkey=${event.pubkey} tags=${JSON.stringify(event.tags)}`,
+          );
           onMessage(event, npub);
         },
         onclose: () => {

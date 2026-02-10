@@ -102,6 +102,9 @@ async function handleNewMessage(
   npub: string,
 ): Promise<void> {
   try {
+    console.log(
+      `Handling event for ${npub}: kind=${event.kind} id=${event.id} pubkey=${event.pubkey}`,
+    );
     const subscription = await db.getSubscription(npub);
     if (!subscription) return;
 
